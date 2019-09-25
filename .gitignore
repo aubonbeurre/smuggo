@@ -28,3 +28,5 @@ _testmain.go
 *.prof
 *.zip
 
+.DS_Store
+.vscode/launch.json

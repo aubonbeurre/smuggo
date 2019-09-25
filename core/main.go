@@ -18,11 +18,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"go-oauth/oauth"
 	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/gomodule/oauth1/oauth"
 )
 
 // The names of the token files.
@@ -90,6 +91,7 @@ func main() {
 		upload(flag.Arg(1), flag.Arg(2))
 	case "albums":
 		albums()
+		getAllImages()
 	case "search":
 		if len(flag.Args()) < 2 {
 			usage()

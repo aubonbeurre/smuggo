@@ -17,12 +17,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"go-oauth/oauth"
 	"io/ioutil"
 	"log"
-	"open-golang/open"
 	"os"
 	"os/user"
+
+	"github.com/gomodule/oauth1/oauth"
+	"github.com/skratchdot/open-golang/open"
 )
 
 const (

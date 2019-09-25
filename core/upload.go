@@ -18,7 +18,6 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
-	"go-oauth/oauth"
 	"io"
 	"io/ioutil"
 	"log"
@@ -29,6 +28,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/gomodule/oauth1/oauth"
 )
 
 const uploadUri = "https://upload.smugmug.com/"

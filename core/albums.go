@@ -19,15 +19,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go-oauth/oauth"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"os/user"
+	"path"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gomodule/oauth1/oauth"
 )
 
 const (
@@ -35,9 +39,13 @@ const (
 	apiCurUser   = apiRoot + "/api/v2!authuser"
 	apiAlbums    = "!albums"
 	searchAlbums = apiRoot + "/api/v2/album!search"
+	imagesAlbums = apiRoot + "/api/v2/album/%s!images"
 )
 
 const albumPageSize = 100
+
+var gAlbums []albumJson
+var gImages []imageJson
 
 type uriJson struct {
 	Uri string
@@ -56,9 +64,23 @@ type searchAlbumJson struct {
 	Name     string
 }
 
+type imageJson struct {
+	Uri          string
+	FileName     string
+	Date         string
+	ArchivedUri  string
+	ArchivedSize int
+	ArchivedMD5  string
+}
+
 type albumJson struct {
 	Uri     string
 	UrlName string
+}
+
+func (a albumJson) key() string {
+	tokens := strings.Split(a.Uri, "/")
+	return tokens[len(tokens)-1]
 }
 
 // Sort album array by UrlName for printing.
@@ -74,9 +96,24 @@ type endpointJson struct {
 	User  uriJson
 }
 
+type imagesRespJson struct {
+	AlbumImage []imageJson
+	Pages      pagesJson
+}
+
+type albumImages struct {
+	AlbumImage []imageJson
+	Dir        string
+	Album      albumJson
+}
+
 // Standard top level response from SmugMug API.
 type responseJson struct {
 	Response endpointJson
+}
+
+type imagesJson struct {
+	Response imagesRespJson
 }
 
 type searchJson struct {
@@ -132,11 +169,9 @@ func getUser(userToken *oauth.Credentials) (string, error) {
 func printAlbums(albums []albumJson) {
 	sort.Sort(byUrlName(albums))
 	for _, album := range albums {
-		tokens := strings.Split(album.Uri, "/")
-		if len(tokens) > 0 {
-			fmt.Println(album.UrlName + " :: " + tokens[len(tokens)-1])
-		}
+		fmt.Println(album.UrlName + " :: " + album.key())
 	}
+	gAlbums = albums
 }
 
 // aggregateTerms combines search terms into a single string with each search
@@ -234,6 +269,142 @@ func printSearchResults(results []searchAlbumJson) {
 	for _, album := range results {
 		fmt.Println(album.Name + " :: " + album.AlbumKey)
 	}
+}
+
+func getImages(client *http.Client, userToken *oauth.Credentials,
+	albumsURI string, start int, count int,
+	epChan chan imagesRespJson) {
+	var queryParams = url.Values{
+		"_accept":    {"application/json"},
+		"_verbosity": {"1"},
+		"start":      {fmt.Sprintf("%d", start)},
+		"count":      {fmt.Sprintf("%d", count)},
+	}
+
+	resp, err := oauthClient.Get(client, userToken, albumsURI, queryParams)
+	if err != nil {
+		return
+	}
+
+	bytes, err := func() ([]byte, error) {
+		defer resp.Body.Close()
+		b, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	}()
+
+	if err != nil {
+		log.Println("Reading images: " + err.Error())
+		return
+	}
+
+	//fmt.Println(string(bytes))
+	var respJson imagesJson
+	err = json.Unmarshal(bytes, &respJson)
+	if err != nil {
+		log.Println("Decoding images endpoint JSON: " + err.Error())
+		return
+	}
+
+	if len(respJson.Response.AlbumImage) < 1 {
+		//fmt.Println("No images found.")
+		//return
+	}
+
+	epChan <- respJson.Response
+}
+
+func getAllImages() {
+	userToken, err := loadUserToken()
+	if err != nil {
+		log.Println("Error reading OAuth token: " + err.Error())
+		return
+	}
+	var client = &http.Client{}
+
+	allImgs := make([]albumImages, 0)
+	usr, _ := user.Current()
+	smugmugdir := path.Join(usr.HomeDir, "smugmug")
+	for _, album := range gAlbums {
+		epChan := make(chan imagesRespJson, 10)
+		fmt.Printf("Requesting number of images for %s\n", album.UrlName)
+		imagesURI := fmt.Sprintf(imagesAlbums, album.key())
+		getImages(client, userToken, imagesURI, 1, 1, epChan)
+		ep := <-epChan
+
+		fmt.Printf("%d images in %s\n", ep.Pages.Total, album.UrlName)
+		dir := path.Join(smugmugdir, album.UrlName)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			os.Mkdir(dir, 0666)
+		}
+
+		if ep.Pages.Count >= ep.Pages.Total {
+			imgs := albumImages{Album: album, AlbumImage: ep.AlbumImage, Dir: dir}
+			allImgs = append(allImgs, imgs)
+			continue
+		}
+
+		waitGrp := sync.WaitGroup{}
+		start := ep.Pages.Count + 1
+
+		for start < ep.Pages.Total {
+			fmt.Printf("Requesting %d images starting at %d.\n", albumPageSize, start)
+			waitGrp.Add(1)
+			go func(startInd int) {
+				defer waitGrp.Done()
+				getImages(client, userToken, imagesURI, startInd, albumPageSize, epChan)
+			}(start)
+			start += albumPageSize
+		}
+
+		albumImgs := make([]imageJson, 0, ep.Pages.Total)
+		albumImgs = append(albumImgs, ep.AlbumImage...)
+
+		albumsReqDoneChan := make(chan bool)
+		resultsPrintedChan := make(chan bool)
+		go collectImageResults(albumImgs, albumsReqDoneChan, epChan,
+			resultsPrintedChan)
+
+		waitGrp.Wait()
+
+		// Tell collectImageResults() that all album requests finished.
+		albumsReqDoneChan <- true
+
+		// Wait for albums to be displayed.
+		<-resultsPrintedChan
+
+		imgs := albumImages{Album: album, AlbumImage: gImages, Dir: dir}
+		allImgs = append(allImgs, imgs)
+	}
+	for _, a := range allImgs {
+		fmt.Printf("%d images in %s => %s\n", len(a.AlbumImage), a.Album.UrlName, a.Dir)
+	}
+}
+
+// collectImageResults receives albums over epChan from getAlbumPage().  It
+// continues to listen to epChan until receiving true from albumsReqDoneChan.
+// Finally, it outputs the albums to stdout and indicates completion by
+// sending true over resultsPrintedChan.
+func collectImageResults(
+	albumImgs []imageJson,
+	albumsReqDoneChan chan bool,
+	epChan chan imagesRespJson,
+	resultsPrintedChan chan bool) {
+
+	done := false
+	for !done || len(epChan) > 0 {
+		select {
+		case epAlbs := <-epChan:
+			albumImgs = append(albumImgs, epAlbs.AlbumImage...)
+		case done = <-albumsReqDoneChan:
+		}
+	}
+
+	//printAlbums(albums)
+	gImages = albumImgs
+	resultsPrintedChan <- true
 }
 
 // albums lists all the albums (and their keys) that belong to the user.
