@@ -316,6 +316,28 @@ func getImages(client *http.Client, userToken *oauth.Credentials,
 	epChan <- respJson.Response
 }
 
+func getHTTP(url string) (bodyBytes []byte, err error) {
+	client := &http.Client{}
+
+	var req *http.Request
+	if req, err = http.NewRequest("GET", url, nil); err != nil {
+		return nil, err
+	}
+	//req.Header.Add("x-api-key", GPrefs.Lambda.Token)
+	//req.Header.Set("Content-Type", "application/json")
+
+	var resp *http.Response
+	if resp, err = client.Do(req); err != nil {
+		return nil, err
+	}
+
+	if bodyBytes, err = ioutil.ReadAll(resp.Body); err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return bodyBytes, nil
+}
+
 func getAllImages() {
 	userToken, err := loadUserToken()
 	if err != nil {
@@ -377,9 +399,25 @@ func getAllImages() {
 
 		imgs := albumImages{Album: album, AlbumImage: gImages, Dir: dir}
 		allImgs = append(allImgs, imgs)
+
+		for _, i := range gImages {
+			if bodyBytes, err := getHTTP(i.ArchivedUri); err != nil {
+				fmt.Printf("Error img %s album %s: %v\n", i.FileName, album.UrlName, err)
+			} else {
+				fmt.Println(len(bodyBytes))
+			}
+		}
 	}
 	for _, a := range allImgs {
 		fmt.Printf("%d images in %s => %s\n", len(a.AlbumImage), a.Album.UrlName, a.Dir)
+
+		for _, i := range a.AlbumImage {
+			if bodyBytes, err := getHTTP(i.ArchivedUri); err != nil {
+				fmt.Printf("Error img %s album %s: %v\n", i.FileName, a.Album.UrlName, err)
+			} else {
+				fmt.Println(len(bodyBytes))
+			}
+		}
 	}
 }
 
