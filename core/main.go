@@ -57,7 +57,7 @@ func usage() {
 	fmt.Println("\tsearch <search term 1> ... <search term n>")
 	fmt.Println("\tupload <album key> <filename>")
 	fmt.Println("\tmultiupload <# parallel uploads> <album key> <filename 1> ... <filename n>")
-	fmt.Println("\nNumber of retries defaults to 2 if not specified.\n")
+	fmt.Println("\nNumber of retries defaults to 2 if not specified.")
 }
 
 func init() {

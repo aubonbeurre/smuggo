@@ -32,9 +32,9 @@ import (
 	"github.com/gomodule/oauth1/oauth"
 )
 
-const uploadUri = "https://upload.smugmug.com/"
+const uploadURI = "https://upload.smugmug.com/"
 
-type uploadResponseJson struct {
+type uploadResponseJSON struct {
 	Stat    string
 	Message string
 }
@@ -49,7 +49,7 @@ func upload(albumKey string, filename string) {
 
 	var client = http.Client{}
 
-	err = postImage(&client, uploadUri, userToken, albumKey, filename, retriesFlag+1)
+	err = postImage(&client, uploadURI, userToken, albumKey, filename, retriesFlag+1)
 	if err != nil {
 		log.Println("Error uploading: " + err.Error())
 	}
@@ -96,7 +96,7 @@ func multiUpload(numParallel int, albumKey string, filenames []string) {
 		semaph <- 1
 		go func(filename string) {
 			fmt.Println("go " + filename)
-			err := postImage(&client, uploadUri, userToken, albumKey, filename, retriesFlag+1)
+			err := postImage(&client, uploadURI, userToken, albumKey, filename, retriesFlag+1)
 			if err != nil {
 				log.Println("Error uploading: " + err.Error())
 			}
@@ -212,8 +212,8 @@ func postImage(client *http.Client, uri string, credentials *oauth.Credentials,
 		fmt.Println(resp.Status)
 		fmt.Println(string(bytes))
 
-		var respJson uploadResponseJson
-		err = json.Unmarshal(bytes, &respJson)
+		var respJSON uploadResponseJSON
+		err = json.Unmarshal(bytes, &respJSON)
 		if err != nil {
 			log.Println("Error decoding upload response JSON: " + err.Error())
 			if tryCount < tries-1 {
@@ -222,7 +222,7 @@ func postImage(client *http.Client, uri string, credentials *oauth.Credentials,
 			return err
 		}
 
-		if respJson.Stat == "ok" {
+		if respJSON.Stat == "ok" {
 			break
 		}
 	}

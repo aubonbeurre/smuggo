@@ -96,7 +96,7 @@ func apikey() {
 		return
 	}
 
-	credentials := oauth.Credentials{key, secret}
+	credentials := oauth.Credentials{Token: key, Secret: secret}
 	err := storeAccessData(&credentials, userHomeDir+smuggoDir+apiTokenFile)
 	if err != nil {
 		fmt.Println("Saving API key: " + err.Error())
