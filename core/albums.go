@@ -347,7 +347,7 @@ func downloadOneImage(client *http.Client, j downloadImage) (err error) {
 	target := path.Join(j.Dir, j.AlbumImage.FileName)
 	if stat, err := os.Stat(target); !os.IsNotExist(err) && !stat.IsDir() {
 		if stat.Size() == j.AlbumImage.ArchivedSize {
-			fmt.Printf("SKIP img %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
+			//fmt.Printf("SKIP img %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 			return nil
 		}
 	}
@@ -366,7 +366,7 @@ func workerFetchBuilds(client *http.Client, id int, jobs <-chan downloadImage, r
 			fmt.Printf("Error img %s album %s: %v\n", j.AlbumImage.FileName, j.Album.URLName, err)
 			results <- err
 		} else {
-			fmt.Printf("Done %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
+			//fmt.Printf("Done %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 			results <- nil
 		}
 	}
@@ -406,7 +406,7 @@ func getAllImages() {
 		start := ep.Pages.Count + 1
 
 		for start < ep.Pages.Total {
-			fmt.Printf("Requesting %d images starting at %d.\n", albumPageSize, start)
+			//fmt.Printf("Requesting %d images starting at %d.\n", albumPageSize, start)
 			waitGrp.Add(1)
 			go func(startInd int) {
 				defer waitGrp.Done()
@@ -446,7 +446,7 @@ func getAllImages() {
 					if err := downloadOneImage(client, j); err != nil {
 						fmt.Printf("Error img %s album %s: %v\n", j.AlbumImage.FileName, j.Album.URLName, err)
 					} else {
-						fmt.Printf("Done %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
+						//fmt.Printf("Done %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 					}
 					<-semaph
 				}(i)
