@@ -69,7 +69,7 @@ type imageJSON struct {
 	FileName     string
 	Date         string
 	ArchivedURI  string `json:"ArchivedUri"`
-	ArchivedSize int
+	ArchivedSize int64
 	ArchivedMD5  string
 }
 
@@ -322,8 +322,7 @@ func getImages(client *http.Client, userToken *oauth.Credentials,
 	epChan <- respJSON.Response
 }
 
-func getHTTP(url string) (bodyBytes []byte, err error) {
-	client := &http.Client{}
+func getHTTP(client *http.Client, url string) (bodyBytes []byte, err error) {
 
 	var req *http.Request
 	if req, err = http.NewRequest("GET", url, nil); err != nil {
@@ -344,21 +343,30 @@ func getHTTP(url string) (bodyBytes []byte, err error) {
 	return bodyBytes, nil
 }
 
-func downloadOneImage(j downloadImage) (err error) {
+func downloadOneImage(client *http.Client, j downloadImage) (err error) {
+	target := path.Join(j.Dir, j.AlbumImage.FileName)
+	if stat, err := os.Stat(target); !os.IsNotExist(err) && !stat.IsDir() {
+		if stat.Size() == j.AlbumImage.ArchivedSize {
+			fmt.Printf("SKIP img %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
+			return nil
+		}
+	}
+
 	var bodyBytes []byte
-	if bodyBytes, err = getHTTP(j.AlbumImage.ArchivedURI); err != nil {
+	if bodyBytes, err = getHTTP(client, j.AlbumImage.ArchivedURI); err != nil {
 		return err
 	}
 
-	return ioutil.WriteFile(path.Join(j.Dir, j.AlbumImage.FileName), bodyBytes, 0644)
+	return ioutil.WriteFile(target, bodyBytes, 0644)
 }
 
-func workerFetchImages(id int, jobs <-chan downloadImage, results chan<- error) {
+func workerFetchBuilds(client *http.Client, id int, jobs <-chan downloadImage, results chan<- error) {
 	for j := range jobs {
-		if err := downloadOneImage(j); err != nil {
+		if err := downloadOneImage(client, j); err != nil {
 			fmt.Printf("Error img %s album %s: %v\n", j.AlbumImage.FileName, j.Album.URLName, err)
-			results <- fmt.Errorf("Error img %s album %s: %v", j.AlbumImage.FileName, j.Album.URLName, err)
+			results <- err
 		} else {
+			fmt.Printf("Done %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 			results <- nil
 		}
 	}
@@ -425,26 +433,55 @@ func getAllImages() {
 
 		imgs := albumImages{Album: album, AlbumImage: gImages, Dir: dir}
 		allImgs = append(allImgs, imgs)
+	}
 
-		if false {
-			for _, i := range gImages {
-				if bodyBytes, err := getHTTP(i.ArchivedURI); err != nil {
-					fmt.Printf("Error img %s album %s: %v\n", i.FileName, album.URLName, err)
-				} else {
-					fmt.Println(len(bodyBytes))
-				}
+	if false {
+
+		semaph := make(chan int, 8)
+		for _, a := range allImgs {
+			for _, i := range a.AlbumImage {
+				semaph <- 1
+				i := downloadImage{Album: a.Album, AlbumImage: i, Dir: a.Dir}
+				go func(j downloadImage) {
+					if err := downloadOneImage(client, j); err != nil {
+						fmt.Printf("Error img %s album %s: %v\n", j.AlbumImage.FileName, j.Album.URLName, err)
+					} else {
+						fmt.Printf("Done %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
+					}
+					<-semaph
+				}(i)
 			}
 		}
-	}
-	for _, a := range allImgs {
-		fmt.Printf("%d images in %s => %s\n", len(a.AlbumImage), a.Album.URLName, a.Dir)
 
-		for _, i := range a.AlbumImage {
-			if bodyBytes, err := getHTTP(i.ArchivedURI); err != nil {
-				fmt.Printf("Error img %s album %s: %v\n", i.FileName, a.Album.URLName, err)
-			} else {
-				fmt.Println(len(bodyBytes))
+		for {
+			time.Sleep(time.Second)
+			if len(semaph) == 0 {
+				break
 			}
+		}
+	} else {
+		var allDownloads = make([]downloadImage, 0)
+		for _, a := range allImgs {
+			for _, i := range a.AlbumImage {
+				i := downloadImage{Album: a.Album, AlbumImage: i, Dir: a.Dir}
+				allDownloads = append(allDownloads, i)
+			}
+		}
+
+		var jobs = make(chan downloadImage, len(allDownloads))
+		var results = make(chan error, len(allDownloads))
+
+		for w := 1; w <= 8; w++ { //runtime.NumCPU())
+			go workerFetchBuilds(client, w, jobs, results)
+		}
+
+		for _, a := range allDownloads {
+			jobs <- a
+		}
+		close(jobs)
+
+		for range allDownloads {
+			<-results
 		}
 	}
 }
