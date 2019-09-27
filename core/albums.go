@@ -194,14 +194,15 @@ func getUser(userToken *oauth.Credentials) (string, error) {
 
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		fmt.Println("getUser response: " + resp.Status)
+		return "", fmt.Errorf("getUser response: " + resp.Status)
+	}
+
 	bytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Println("Error reading user endpoint: " + err.Error())
 		return "", err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		fmt.Println("getUser response: " + resp.Status)
 	}
 
 	var respJSON responseJSON
@@ -371,18 +372,19 @@ func getImages(client *http.Client, userToken *oauth.Credentials,
 	epChan <- respJSON.Response
 }
 
-func getHTTP(client *http.Client, url string) (bodyBytes []byte, err error) {
+func getHTTP(client *http.Client, userToken *oauth.Credentials, urla string) (bodyBytes []byte, err error) {
 
-	var req *http.Request
-	if req, err = http.NewRequest("GET", url, nil); err != nil {
-		return nil, err
-	}
-	//req.Header.Add("x-api-key", GPrefs.Lambda.Token)
-	//req.Header.Set("Content-Type", "application/json")
+	var queryParams = url.Values{}
 
 	var resp *http.Response
-	if resp, err = client.Do(req); err != nil {
+	resp, err = oauthClient.Get(client, userToken, urla, queryParams)
+	if err != nil {
 		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Println("getHTTP response: " + resp.Status)
+		return nil, fmt.Errorf("getHTTP response: " + resp.Status)
 	}
 
 	if bodyBytes, err = ioutil.ReadAll(resp.Body); err != nil {
@@ -419,14 +421,15 @@ func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downl
 
 		defer resp.Body.Close()
 
+		if resp.StatusCode != http.StatusOK {
+			fmt.Println("getUser response: " + resp.Status)
+			return fmt.Errorf("getUser response: " + resp.Status)
+		}
+
 		bytes, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.Println("Error reading user endpoint: " + err.Error())
 			return err
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			fmt.Println("getUser response: " + resp.Status)
 		}
 
 		var respJSON largestVideoResponseJSON
@@ -456,14 +459,15 @@ func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downl
 
 		defer resp.Body.Close()
 
+		if resp.StatusCode != http.StatusOK {
+			fmt.Println("getUser response: " + resp.Status)
+			return fmt.Errorf("getUser response: " + resp.Status)
+		}
+
 		bytes, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.Println("Error reading user endpoint: " + err.Error())
 			return err
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			fmt.Println("getUser response: " + resp.Status)
 		}
 
 		var respJSON largestImageResponseJSON
@@ -481,12 +485,11 @@ func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downl
 		if stat.Size() == size {
 			//fmt.Printf("SKIP img %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 			return nil
-		} else {
-			fmt.Printf("WTF img %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 		}
+		fmt.Printf("WTF img %s album %s (%d != %d)\n", j.AlbumImage.FileName, j.Album.URLName, stat.Size(), size)
 	}
 
-	if bodyBytes, err = getHTTP(client, downloadurl); err != nil {
+	if bodyBytes, err = getHTTP(client, userToken, downloadurl); err != nil {
 		return err
 	}
 
@@ -523,6 +526,9 @@ func getAllImages() {
 	usr, _ := user.Current()
 	smugmugdir := path.Join(usr.HomeDir, "smugmug")
 	for _, album := range gAlbums {
+		//if album.URLName != "Vero" {
+		//	continue
+		//}
 		epChan := make(chan imagesRespJSON, 10)
 		fmt.Printf("Requesting number of images for %s\n", album.URLName)
 		imagesURI := fmt.Sprintf(imagesAlbums, album.key())
