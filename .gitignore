@@ -31,3 +31,4 @@ _testmain.go
 .DS_Store
 .vscode/launch.json
 core/__debug_bin
+core/core

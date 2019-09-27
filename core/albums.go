@@ -40,6 +40,8 @@ const (
 	apiAlbums    = "!albums"
 	searchAlbums = apiRoot + "/api/v2/album!search"
 	imagesAlbums = apiRoot + "/api/v2/album/%s!images"
+	largestvideo = apiRoot + "/api/v2/image/%s-0!largestvideo"
+	largestimage = apiRoot + "/api/v2/image/%s-0!largestimage"
 )
 
 const albumPageSize = 100
@@ -65,12 +67,12 @@ type searchAlbumJSON struct {
 }
 
 type imageJSON struct {
-	URI          string `json:"Uri"`
-	FileName     string
-	Date         string
-	ArchivedURI  string `json:"ArchivedUri"`
-	ArchivedSize int64
-	ArchivedMD5  string
+	URI      string `json:"Uri"`
+	FileName string
+	Date     string
+	IsVideo  bool
+	ImageKey string
+	Format   string
 }
 
 type albumJSON struct {
@@ -130,6 +132,34 @@ type searchJSON struct {
 // Top level response for search from SmugMug API.
 type searchResponseJSON struct {
 	Response searchJSON
+}
+
+type largestVideo struct {
+	MD5  string
+	URL  string `json:"Url"`
+	Size int64
+}
+
+type largestVideoJSON struct {
+	LargestVideo largestVideo
+}
+
+type largestVideoResponseJSON struct {
+	Response largestVideoJSON
+}
+
+type largestImage struct {
+	MD5  string
+	URL  string `json:"Url"`
+	Size int64
+}
+
+type largestImageJSON struct {
+	LargestImage largestImage
+}
+
+type largestImageResponseJSON struct {
+	Response largestImageJSON
 }
 
 // getUser retrieves the URI that serves the current user.
@@ -343,30 +373,110 @@ func getHTTP(client *http.Client, url string) (bodyBytes []byte, err error) {
 	return bodyBytes, nil
 }
 
-func downloadOneImage(client *http.Client, j downloadImage) (err error) {
+func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downloadImage) (err error) {
 	target := path.Join(j.Dir, j.AlbumImage.FileName)
+
+	var bodyBytes []byte
+	var downloadurl string
+	var size int64
+
+	if j.AlbumImage.IsVideo {
+		var uri = fmt.Sprintf(largestvideo, j.AlbumImage.ImageKey)
+
+		var queryParams = url.Values{
+			"_accept":    {"application/json"},
+			"_verbosity": {"1"},
+			"start":      {fmt.Sprintf("%d", 1)},
+			"count":      {fmt.Sprintf("%d", 1)},
+		}
+
+		var resp *http.Response
+		resp, err = oauthClient.Get(client, userToken, uri, queryParams)
+		if err != nil {
+			return err
+		}
+
+		defer resp.Body.Close()
+
+		bytes, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println("Error reading user endpoint: " + err.Error())
+			return err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			fmt.Println("getUser response: " + resp.Status)
+		}
+
+		var respJSON largestVideoResponseJSON
+		err = json.Unmarshal(bytes, &respJSON)
+		if err != nil {
+			log.Println("Error decoding user endpoint JSON: " + err.Error())
+			return err
+		}
+
+		downloadurl = respJSON.Response.LargestVideo.URL
+		size = respJSON.Response.LargestVideo.Size
+	} else {
+		var uri = fmt.Sprintf(largestimage, j.AlbumImage.ImageKey)
+
+		var queryParams = url.Values{
+			"_accept":    {"application/json"},
+			"_verbosity": {"1"},
+			"start":      {fmt.Sprintf("%d", 1)},
+			"count":      {fmt.Sprintf("%d", 1)},
+		}
+
+		var resp *http.Response
+		resp, err = oauthClient.Get(client, userToken, uri, queryParams)
+		if err != nil {
+			return err
+		}
+
+		defer resp.Body.Close()
+
+		bytes, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println("Error reading user endpoint: " + err.Error())
+			return err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			fmt.Println("getUser response: " + resp.Status)
+		}
+
+		var respJSON largestImageResponseJSON
+		err = json.Unmarshal(bytes, &respJSON)
+		if err != nil {
+			log.Println("Error decoding user endpoint JSON: " + err.Error())
+			return err
+		}
+
+		downloadurl = respJSON.Response.LargestImage.URL
+		size = respJSON.Response.LargestImage.Size
+	}
+
 	if stat, err := os.Stat(target); !os.IsNotExist(err) && !stat.IsDir() {
-		if stat.Size() == j.AlbumImage.ArchivedSize {
+		if stat.Size() == size {
 			//fmt.Printf("SKIP img %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 			return nil
 		}
 	}
 
-	var bodyBytes []byte
-	if bodyBytes, err = getHTTP(client, j.AlbumImage.ArchivedURI); err != nil {
+	if bodyBytes, err = getHTTP(client, downloadurl); err != nil {
 		return err
 	}
 
+	fmt.Printf("-> %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 	return ioutil.WriteFile(target, bodyBytes, 0644)
 }
 
-func workerFetchBuilds(client *http.Client, id int, jobs <-chan downloadImage, results chan<- error) {
+func workerFetchBuilds(client *http.Client, userToken *oauth.Credentials, id int, jobs <-chan downloadImage, results chan<- error) {
 	for j := range jobs {
-		if err := downloadOneImage(client, j); err != nil {
+		if err := downloadOneImage(client, userToken, j); err != nil {
 			fmt.Printf("Error img %s album %s: %v\n", j.AlbumImage.FileName, j.Album.URLName, err)
 			results <- err
 		} else {
-			//fmt.Printf("Done %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 			results <- nil
 		}
 	}
@@ -393,7 +503,7 @@ func getAllImages() {
 		fmt.Printf("%d images in %s\n", ep.Pages.Total, album.URLName)
 		dir := path.Join(smugmugdir, album.URLName)
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			os.Mkdir(dir, 0666)
+			os.Mkdir(dir, 0777)
 		}
 
 		if ep.Pages.Count >= ep.Pages.Total {
@@ -443,7 +553,7 @@ func getAllImages() {
 				semaph <- 1
 				i := downloadImage{Album: a.Album, AlbumImage: i, Dir: a.Dir}
 				go func(j downloadImage) {
-					if err := downloadOneImage(client, j); err != nil {
+					if err := downloadOneImage(client, userToken, j); err != nil {
 						fmt.Printf("Error img %s album %s: %v\n", j.AlbumImage.FileName, j.Album.URLName, err)
 					} else {
 						//fmt.Printf("Done %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
@@ -472,7 +582,7 @@ func getAllImages() {
 		var results = make(chan error, len(allDownloads))
 
 		for w := 1; w <= 8; w++ { //runtime.NumCPU())
-			go workerFetchBuilds(client, w, jobs, results)
+			go workerFetchBuilds(client, userToken, w, jobs, results)
 		}
 
 		for _, a := range allDownloads {
