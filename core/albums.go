@@ -40,6 +40,8 @@ const (
 	apiAlbums    = "!albums"
 	searchAlbums = apiRoot + "/api/v2/album!search"
 	imagesAlbums = apiRoot + "/api/v2/album/%s!images"
+	gNumWorkers  = 20
+	gAlbumOnly   = ""
 )
 
 const albumPageSize = 100
@@ -435,7 +437,7 @@ func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downl
 		var respJSON largestVideoResponseJSON
 		err = json.Unmarshal(bytes, &respJSON)
 		if err != nil {
-			log.Println("Error decoding user endpoint JSON: " + err.Error())
+			log.Println("Error decoding largestVideoResponseJSON endpoint JSON: " + err.Error())
 			return err
 		}
 
@@ -473,7 +475,7 @@ func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downl
 		var respJSON largestImageResponseJSON
 		err = json.Unmarshal(bytes, &respJSON)
 		if err != nil {
-			log.Println("Error decoding user endpoint JSON: " + err.Error())
+			log.Println("Error decoding largestImageResponseJSON endpoint JSON: " + err.Error())
 			return err
 		}
 
@@ -482,7 +484,7 @@ func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downl
 	}
 
 	if stat, err := os.Stat(target); !os.IsNotExist(err) && !stat.IsDir() {
-		if stat.Size() == size {
+		if size == 0 || stat.Size() == size {
 			//fmt.Printf("SKIP img %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 			return nil
 		}
@@ -526,9 +528,9 @@ func getAllImages() {
 	usr, _ := user.Current()
 	smugmugdir := path.Join(usr.HomeDir, "smugmug")
 	for _, album := range gAlbums {
-		//if album.URLName != "Vero" {
-		//	continue
-		//}
+		if len(gAlbumOnly) != 0 && album.URLName != gAlbumOnly {
+			continue
+		}
 		epChan := make(chan imagesRespJSON, 10)
 		fmt.Printf("Requesting number of images for %s\n", album.URLName)
 		imagesURI := fmt.Sprintf(imagesAlbums, album.key())
@@ -604,7 +606,7 @@ func getAllImages() {
 	var jobs = make(chan downloadImage, len(allDownloads))
 	var results = make(chan error, len(allDownloads))
 
-	for w := 1; w <= 8; w++ { //runtime.NumCPU())
+	for w := 1; w <= gNumWorkers; w++ { //runtime.NumCPU())
 		go workerFetchBuilds(client, userToken, w, jobs, results)
 	}
 
