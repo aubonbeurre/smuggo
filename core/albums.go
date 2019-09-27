@@ -40,8 +40,6 @@ const (
 	apiAlbums    = "!albums"
 	searchAlbums = apiRoot + "/api/v2/album!search"
 	imagesAlbums = apiRoot + "/api/v2/album/%s!images"
-	largestvideo = apiRoot + "/api/v2/image/%s-0!largestvideo"
-	largestimage = apiRoot + "/api/v2/image/%s-0!largestimage"
 )
 
 const albumPageSize = 100
@@ -66,6 +64,11 @@ type searchAlbumJSON struct {
 	Name     string
 }
 
+type urisJSON struct {
+	LargestImage string `json:",omitempty"`
+	LargestVideo string `json:",omitempty"`
+}
+
 type imageJSON struct {
 	URI      string `json:"Uri"`
 	FileName string
@@ -73,6 +76,7 @@ type imageJSON struct {
 	IsVideo  bool
 	ImageKey string
 	Format   string
+	Uris     urisJSON
 }
 
 type albumJSON struct {
@@ -107,6 +111,20 @@ type albumImages struct {
 	AlbumImage []imageJSON
 	Dir        string
 	Album      albumJSON
+}
+
+func (a albumImages) FixDoublon() bool {
+	var m = make(map[string]bool)
+	for ind, i := range a.AlbumImage {
+		if m[i.FileName] {
+			var extension = path.Ext(i.FileName)
+			var name = i.FileName[0 : len(i.FileName)-len(extension)]
+			a.AlbumImage[ind].FileName = name + "1" + extension
+			return true
+		}
+		m[i.FileName] = true
+	}
+	return false
 }
 
 type downloadImage struct {
@@ -339,6 +357,7 @@ func getImages(client *http.Client, userToken *oauth.Credentials,
 	//fmt.Println(string(bytes))
 	var respJSON imagesJSON
 	err = json.Unmarshal(bytes, &respJSON)
+
 	if err != nil {
 		log.Println("Decoding images endpoint JSON: " + err.Error())
 		return
@@ -374,14 +393,16 @@ func getHTTP(client *http.Client, url string) (bodyBytes []byte, err error) {
 }
 
 func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downloadImage) (err error) {
-	target := path.Join(j.Dir, j.AlbumImage.FileName)
+	var extension = path.Ext(j.AlbumImage.FileName)
+	var name = j.AlbumImage.FileName[0 : len(j.AlbumImage.FileName)-len(extension)]
+	target := path.Join(j.Dir, name+"_"+j.AlbumImage.ImageKey+extension)
 
 	var bodyBytes []byte
 	var downloadurl string
 	var size int64
 
 	if j.AlbumImage.IsVideo {
-		var uri = fmt.Sprintf(largestvideo, j.AlbumImage.ImageKey)
+		uri := apiRoot + j.AlbumImage.Uris.LargestVideo
 
 		var queryParams = url.Values{
 			"_accept":    {"application/json"},
@@ -418,7 +439,7 @@ func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downl
 		downloadurl = respJSON.Response.LargestVideo.URL
 		size = respJSON.Response.LargestVideo.Size
 	} else {
-		var uri = fmt.Sprintf(largestimage, j.AlbumImage.ImageKey)
+		uri := apiRoot + j.AlbumImage.Uris.LargestImage
 
 		var queryParams = url.Values{
 			"_accept":    {"application/json"},
@@ -460,6 +481,8 @@ func downloadOneImage(client *http.Client, userToken *oauth.Credentials, j downl
 		if stat.Size() == size {
 			//fmt.Printf("SKIP img %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 			return nil
+		} else {
+			fmt.Printf("WTF img %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
 		}
 	}
 
@@ -482,13 +505,19 @@ func workerFetchBuilds(client *http.Client, userToken *oauth.Credentials, id int
 	}
 }
 
+func lambdaRedirectPolicyFunc(req *http.Request, via []*http.Request) error {
+	//req.Header.Add("x-api-key", GPrefs.Lambda.Token)
+	//req.Header.Set("Content-Type", "application/json")
+	return nil
+}
+
 func getAllImages() {
 	userToken, err := loadUserToken()
 	if err != nil {
 		log.Println("Error reading OAuth token: " + err.Error())
 		return
 	}
-	var client = &http.Client{}
+	var client = &http.Client{CheckRedirect: lambdaRedirectPolicyFunc}
 
 	allImgs := make([]albumImages, 0)
 	usr, _ := user.Current()
@@ -546,53 +575,40 @@ func getAllImages() {
 	}
 
 	if false {
-
-		semaph := make(chan int, 8)
 		for _, a := range allImgs {
-			for _, i := range a.AlbumImage {
-				semaph <- 1
-				i := downloadImage{Album: a.Album, AlbumImage: i, Dir: a.Dir}
-				go func(j downloadImage) {
-					if err := downloadOneImage(client, userToken, j); err != nil {
-						fmt.Printf("Error img %s album %s: %v\n", j.AlbumImage.FileName, j.Album.URLName, err)
-					} else {
-						//fmt.Printf("Done %s album %s\n", j.AlbumImage.FileName, j.Album.URLName)
-					}
-					<-semaph
-				}(i)
+			for {
+				if !a.FixDoublon() {
+					break
+				}
 			}
 		}
+	}
 
-		for {
-			time.Sleep(time.Second)
-			if len(semaph) == 0 {
-				break
-			}
-		}
-	} else {
-		var allDownloads = make([]downloadImage, 0)
-		for _, a := range allImgs {
-			for _, i := range a.AlbumImage {
-				i := downloadImage{Album: a.Album, AlbumImage: i, Dir: a.Dir}
-				allDownloads = append(allDownloads, i)
-			}
-		}
+	file, _ := json.MarshalIndent(allImgs, "", " ")
+	_ = ioutil.WriteFile(path.Join(smugmugdir, "allImgs.json"), file, 0644)
 
-		var jobs = make(chan downloadImage, len(allDownloads))
-		var results = make(chan error, len(allDownloads))
-
-		for w := 1; w <= 8; w++ { //runtime.NumCPU())
-			go workerFetchBuilds(client, userToken, w, jobs, results)
+	var allDownloads = make([]downloadImage, 0)
+	for _, a := range allImgs {
+		for _, i := range a.AlbumImage {
+			i := downloadImage{Album: a.Album, AlbumImage: i, Dir: a.Dir}
+			allDownloads = append(allDownloads, i)
 		}
+	}
 
-		for _, a := range allDownloads {
-			jobs <- a
-		}
-		close(jobs)
+	var jobs = make(chan downloadImage, len(allDownloads))
+	var results = make(chan error, len(allDownloads))
 
-		for range allDownloads {
-			<-results
-		}
+	for w := 1; w <= 8; w++ { //runtime.NumCPU())
+		go workerFetchBuilds(client, userToken, w, jobs, results)
+	}
+
+	for _, a := range allDownloads {
+		jobs <- a
+	}
+	close(jobs)
+
+	for range allDownloads {
+		<-results
 	}
 }
 
