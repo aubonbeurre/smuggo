@@ -15,6 +15,12 @@ smuggo is also an excuse to get back into the Go language.  I last touched it
 in December 2014, so it was almost like starting from zero, again.
 
 
+## Installation
+
+```shell script
+go install github.com/jessedusty/smuggo/core
+```
+
 ## Usage
 
 ### WARNING
@@ -113,26 +119,6 @@ directory:
 
 ```bash
 smuggo multiupload 4 5Jbd2q awesome_photo1.jpg awesome_photo2.jpg *.gif
-```
-
-
-## Building from Source
-
-Download and install Go v1.6.x.  Be sure to set your GOPATH environment
-variable as described in the Go installation instructions.
-
-Get the dependencies (sub-modules):
-
-```bash
-git submodule init
-git submodule update
-```
-
-Build:
-
-```bash
-cd core
-go build -o smuggo main.go main.go auth.go upload.go albums.go
 ```
 
 ## License
